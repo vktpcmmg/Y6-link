@@ -1,65 +1,80 @@
 import streamlit as st
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
+import os
 from datetime import datetime
 
-# === CONFIG ===
-FOLDER_ID = "13hG9ayDAHfK9MdVXUQwAYyZlUqWMKKYK"  # Replace with actual folder ID
-
-# === Google Auth ===
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-gc = gspread.authorize(creds)
+# Google Drive Authentication
 gauth = GoogleAuth()
-gauth.credentials = creds
+gauth.LocalWebserverAuth()
 drive = GoogleDrive(gauth)
 
-# === Google Sheet ===
-sheet = gc.open("Meter Photo Uploads").sheet1
+# Replace with your main folder ID in Google Drive
+PARENT_FOLDER_ID = '13hG9ayDAHfK9MdVXUQwAYyZlUqWMKKYK'
 
-# === Streamlit UI ===
-st.title("📷 Meter Replacement Upload")
+# Create folder inside Google Drive
+def create_drive_folder(folder_name, parent_id):
+    folder_metadata = {
+        'title': folder_name,
+        'parents': [{'id': parent_id}],
+        'mimeType': 'application/vnd.google-apps.folder'
+    }
+    folder = drive.CreateFile(folder_metadata)
+    folder.Upload()
+    return folder['id']
+
+# Upload file to Google Drive
+def upload_file_to_drive(file, folder_id):
+    filename = file.name
+    filepath = os.path.join("/tmp", filename)
+    with open(filepath, "wb") as f:
+        f.write(file.getvalue())
+
+    drive_file = drive.CreateFile({'title': filename, 'parents': [{'id': folder_id}]})
+    drive_file.SetContentFile(filepath)
+    drive_file.Upload()
+    os.remove(filepath)
+
+# Create metadata text file and upload it
+def upload_metadata(folder_id, technician, zone, locality, site_name, remark):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    content = f"""Technician: {technician}
+Zone: {zone}
+Locality: {locality}
+Site Name: {site_name}
+Remark: {remark}
+Date: {now}
+"""
+    filepath = "/tmp/info.txt"
+    with open(filepath, "w") as f:
+        f.write(content)
+
+    file_drive = drive.CreateFile({'title': "info.txt", 'parents': [{'id': folder_id}]})
+    file_drive.SetContentFile(filepath)
+    file_drive.Upload()
+    os.remove(filepath)
+
+# Streamlit UI
+st.title("Old Meter Photo Upload")
 
 with st.form("upload_form", clear_on_submit=True):
     technician = st.text_input("Technician Name")
     zone = st.selectbox("Zone", ["NZ", "CZ", "SZ", "MCZ", "SCZ", "EZ"])
     locality = st.text_input("Locality")
-    site_name = st.text_input("Site Name")
-    remark = st.text_input("Remark")
+    site_name = st.text_input("Site Name (Building)")
+    remark = st.text_area("Remark (if any)")
 
-    old_photo = st.file_uploader("Upload OLD Meter Photo", type=["jpg", "jpeg", "png"])
-    new_photo = st.file_uploader("Upload NEW Meter Photo", type=["jpg", "jpeg", "png"])
+    photo_files = st.file_uploader("Upload Old Meter Photos", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
-    submitted = st.form_submit_button("Submit")
+    submitted = st.form_submit_button("Upload")
 
-if submitted:
-    if technician and old_photo and new_photo:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if submitted:
+        if technician and zone and locality and site_name and photo_files:
+            building_folder_id = create_drive_folder(site_name, PARENT_FOLDER_ID)
+            upload_metadata(building_folder_id, technician, zone, locality, site_name, remark)
+            for photo in photo_files:
+                upload_file_to_drive(photo, building_folder_id)
 
-        # Upload OLD Photo
-        old_file = drive.CreateFile({'title': f"{technician}_OLD_{timestamp}.jpg", 'parents': [{'id': FOLDER_ID}]})
-        old_file.SetContentFile(old_photo.name)
-        old_file.Upload()
-        old_file['shared'] = True
-        old_file.Upload()
-        old_link = old_file['alternateLink']
-
-        # Upload NEW Photo
-        new_file = drive.CreateFile({'title': f"{technician}_NEW_{timestamp}.jpg", 'parents': [{'id': FOLDER_ID}]})
-        new_file.SetContentFile(new_photo.name)
-        new_file.Upload()
-        new_file['shared'] = True
-        new_file.Upload()
-        new_link = new_file['alternateLink']
-
-        # Save to Google Sheet
-        sheet.append_row([
-            timestamp, technician, zone, locality, site_name, remark, old_link, new_link
-        ])
-        st.success("✅ Submitted successfully!")
-        st.markdown(f"[📷 View OLD Photo]({old_link})")
-        st.markdown(f"[📷 View NEW Photo]({new_link})")
-    else:
-        st.warning("Please fill all fields and upload both photos.")
+            st.success("All files and details uploaded successfully.")
+        else:
+            st.error("Please fill all fields and upload at least one photo.")
