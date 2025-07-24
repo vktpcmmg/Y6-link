@@ -1,6 +1,7 @@
 streamlit
 gspread
 oauth2client
-pyzbar
+PyDrive
 opencv-python
+pyzbar
 streamlit-webrtc
